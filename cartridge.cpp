@@ -29,7 +29,7 @@ struct{
 } cartridge;
 
 int main(){
-    cartridge.filename = "Pokemon Red.gb";
+    cartridge.filename = "./test-cartridges/Tetris.gb"; //Testing
 
     ifstream file(cartridge.filename, ios::in|ios::binary|ios::ate);
     if(file.is_open()){
