@@ -1,11 +1,12 @@
 #include <iostream>
 #include <stdio.h>
 #include <fstream>
+#include "ppu.hpp"
 
 using namespace std;
 
-uint8_t rom_data[10] = {0xCB, 0xED};
-uint8_t memory[0xFFFF + 1];
+uint8_t *rom_data;
+uint8_t *memory;
 int m_cycles = 0;
 bool stopped = false, halted = false, ime_flag = false, ei_flag = false, ei = false;
 
@@ -2070,9 +2071,9 @@ void execute_instruction(){
         }
         case 0x01: { // LD BC, n16
             registers.pc++;
-            registers.b = rom_data[registers.pc];
-            registers.pc++;
             registers.c = rom_data[registers.pc];
+            registers.pc++;
+            registers.b = rom_data[registers.pc];
             m_cycles += 3;
             registers.pc++;
             break;
@@ -2215,9 +2216,9 @@ void execute_instruction(){
         }
         case 0x11: { // LD DE, n16
             registers.pc++;
-            registers.d = rom_data[registers.pc];
-            registers.pc++;
             registers.e = rom_data[registers.pc];
+            registers.pc++;
+            registers.d = rom_data[registers.pc];
             m_cycles += 3;
             registers.pc++;
             break;
@@ -2361,9 +2362,9 @@ void execute_instruction(){
         }
         case 0x21: { // LD HL, n16
             registers.pc++;
-            registers.h = rom_data[registers.pc];
-            registers.pc++;
             registers.l = rom_data[registers.pc];
+            registers.pc++;
+            registers.h = rom_data[registers.pc];
             m_cycles += 3;
             registers.pc++;
             break;
@@ -4388,27 +4389,78 @@ void execute_instruction(){
     else ei = false;
 }
 
-int main(){ //for testing
-    registers.pc = 0x00; //supposed to be 0x100
-
-    printf("--------------REGISTERS--------------\n");
-    printf("a\tf\tb\tc\td\te\th\tl\tsp\tpc\tm_cycles\n");
-    printf("%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%d\n",
-        registers.a, registers.f,
-        registers.b, registers.c,
-        registers.d, registers.e,
-        registers.h, registers.l,
-        registers.sp, registers.pc,
-        m_cycles);
+void debug_execute(){
+    printf("Executing instruction %02x\n", rom_data[registers.pc]);
     execute_instruction();
-    printf("%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%d\n",
+    printf("%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%d\n",
         registers.a, registers.f,
         registers.b, registers.c,
         registers.d, registers.e,
         registers.h, registers.l,
         registers.sp, registers.pc,
         m_cycles);
-    printf("-------------------------------------\n");
+}
+
+int main(){ //for testing
+    registers.pc = 0x100;
+
+    ifstream file("./test-cartridges/Tetris.gb", ios::in|ios::binary|ios::ate);
+    if(file.is_open()){
+        streamsize size = file.tellg();
+        rom_data = new uint8_t[size];
+        memory = new uint8_t[0xFFFF+5];
+        file.seekg(0, ios::beg);
+        if (file.read(reinterpret_cast<char*>(rom_data), size)) {
+            cout << "File read successfully." << endl;
+        } else {
+            cerr << "Error reading file." << endl;
+        }
+        file.close();
+
+        // printf("a\tf\tb\tc\td\te\th\tl\tsp\tpc\tm_cycles\n");
+        // printf("%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%d\n",
+        //     registers.a, registers.f,
+        //     registers.b, registers.c,
+        //     registers.d, registers.e,
+        //     registers.h, registers.l,
+        //     registers.sp, registers.pc,
+        //     m_cycles);
+
+        PPU *ppu = new PPU();
+        ppu->memory = memory;
+        ppu->cycles = 0;
+        ppu->line = 0;
+        ppu->mode = OAM_SCAN;
+
+        bool flag = false;
+
+        while(true){
+            int initial_m_cycles = m_cycles;
+            if(ime_flag){
+                uint8_t if_reg = memory[0xFF0F];
+                uint8_t ie_reg = memory[0xFFFF];
+                uint8_t fired_interrupts = if_reg & ie_reg;
+
+                if(fired_interrupts & 0x01){ //VBlank
+                    ime_flag = false;
+                    memory[0xFF0F] &= ~0x01;
+                    registers.sp -= 2;
+                    memory[registers.sp] = (registers.pc >> 8) & 0xFF;
+                    memory[registers.sp - 1] = registers.pc & 0xFF;
+                    registers.pc = 0x0040;
+                    m_cycles += 5;
+                }
+                // other interrupts
+            }
+
+            execute_instruction();
+            ppu_step(ppu, m_cycles - initial_m_cycles);
+        }
+
+        delete ppu;
+        ppu = nullptr;
+        delete[] rom_data;
+    }
 
     return 0;
 }

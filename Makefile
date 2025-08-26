@@ -1,11 +1,11 @@
-load: constants.o cartridge.o
-	g++ constants.o cartridge.o -o load
+load: ppu.o cpu.o
+	g++ ppu.o cpu.o -o load
 
-constants.o: constants.cpp
-	g++ -c constants.cpp
+ppu.o: ppu.cpp
+	g++ -c ppu.cpp
 
-cartridge.o: cartridge.cpp
-	g++ -c cartridge.cpp
+cpu.o: cpu.cpp
+	g++ -c cpu.cpp
 
 .PHONY: clean
 clean:
