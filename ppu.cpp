@@ -104,17 +104,6 @@ void drawGrid(PPU* ppu) {
 }
 
 void debugDraw(PPU *ppu, SDL_Renderer *renderer, SDL_Texture *texture){
-    // for(int x = 0; x < SCREEN_WIDTH; x++){
-    //     for(int y = 0; y < SCREEN_HEIGHT; y++){
-    //         if((ppu->frame_buffer)[x][y] == 0xFFFFFFFF) printf(".");
-    //         else if((ppu->frame_buffer)[x][y] == 0xFFAAAAAA) printf("|");
-    //         else if((ppu->frame_buffer)[x][y] == 0xFF555555) printf("/");
-    //         else if((ppu->frame_buffer)[x][y] == 0xFF000000) printf("X");
-    //     }
-    //     printf("\n");
-    // }
-    // printf("-----------------------------------------------------\n");
-
     SDL_UpdateTexture(texture, NULL, (ppu->frame_buffer).data(), SCREEN_WIDTH * sizeof(uint32_t));
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, NULL, NULL);

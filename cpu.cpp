@@ -4391,9 +4391,9 @@ void execute_instruction(){
 }
 
 void debug_execute(){
-    printf("Executing instruction %02x\n", rom_data[registers.pc]);
+    printf("Executing instruction %02x    ", rom_data[registers.pc]);
     execute_instruction();
-    printf("%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%02x\t%d\n",
+    printf("AF: %02x%02x    BC: %02x%02x    DE: %02x%02x    HL: %02x%02x    SP: %02x    PC: %02x    Cycles: %d\n",
         registers.a, registers.f,
         registers.b, registers.c,
         registers.d, registers.e,
@@ -4417,15 +4417,6 @@ int main(int argc, char* args[]){
             cerr << "Error reading file." << '\n';
         }
         file.close();
-
-        // printf("a\tf\tb\tc\td\te\th\tl\tsp\tpc\tm_cycles\n");
-        // printf("%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%x\t%d\n",
-        //     registers.a, registers.f,
-        //     registers.b, registers.c,
-        //     registers.d, registers.e,
-        //     registers.h, registers.l,
-        //     registers.sp, registers.pc,
-        //     m_cycles);
 
         PPU *ppu = new PPU();
         ppu->memory = memory;
