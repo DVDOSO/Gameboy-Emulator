@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <fstream>
 #include <array>
+#include <SDL2/SDL.h>
 
 using namespace std;
 
@@ -12,17 +13,17 @@ enum PPUMode{
     V_BLANK = 1
 };
 
+const int SCREEN_WIDTH = 160;
+const int SCREEN_HEIGHT = 144;
+const int TILE_SIZE = 8;
+
 struct PPU{
     uint8_t *memory;
     int cycles;
     int line;
     PPUMode mode = OAM_SCAN;
+    array<array<uint32_t, SCREEN_WIDTH>, SCREEN_HEIGHT> frame_buffer;
 };
-
-const int SCREEN_WIDTH = 160;
-const int SCREEN_HEIGHT = 144;
-
-array<array<uint32_t, SCREEN_WIDTH>, SCREEN_HEIGHT> frame_buffer;
 
 const array<uint32_t, 4> GB_COLOR_PALETTE = {
     0xFFFFFFFF,
@@ -44,7 +45,7 @@ void drawScanline(PPU *ppu){
     bool bg_enabled = (lcdc & 0x01);
     if(!bg_enabled){
         for(int x = 0; x < SCREEN_WIDTH; x++){
-            frame_buffer[ppu->line][x] = GB_COLOR_PALETTE[0];
+            (ppu->frame_buffer)[ppu->line][x] = GB_COLOR_PALETTE[0];
         }
         return;
     }
@@ -85,24 +86,42 @@ void drawScanline(PPU *ppu){
         uint8_t final_gb_color_index = (bgp >> (color_index * 2)) & 0x03;
         uint32_t final_pixel_color = GB_COLOR_PALETTE[final_gb_color_index];
 
-        frame_buffer[ppu->line][x] = final_pixel_color;
+        (ppu->frame_buffer)[ppu->line][x] = final_pixel_color;
     }
 }
 
-void debugDraw(){
-    for(int x = 0; x < SCREEN_WIDTH; x++){
-        for(int y = 0; y < SCREEN_HEIGHT; y++){
-            if(frame_buffer[x][y] == 0xFFFFFFFF) printf(".");
-            else if(frame_buffer[x][y] == 0xFFAAAAAA) printf("|");
-            else if(frame_buffer[x][y] == 0xFF555555) printf("/");
-            else if(frame_buffer[x][y] == 0xFF000000) printf("X");
+void drawGrid(PPU* ppu) {
+    for (int y = 0; y < SCREEN_HEIGHT; ++y) {
+        for (int x = 0; x < SCREEN_WIDTH; ++x) {
+            if (y % TILE_SIZE == 0) {
+                ppu->frame_buffer[y][x] = 0xFF000000;
+            }
+            if (x % TILE_SIZE == 0) {
+                ppu->frame_buffer[y][x] = 0xFF000000;
+            }
         }
-        printf("\n");
     }
-    printf("-----------------------------------------------------\n");
 }
 
-void ppu_step(PPU *ppu, int cpu_cycles){
+void debugDraw(PPU *ppu, SDL_Renderer *renderer, SDL_Texture *texture){
+    // for(int x = 0; x < SCREEN_WIDTH; x++){
+    //     for(int y = 0; y < SCREEN_HEIGHT; y++){
+    //         if((ppu->frame_buffer)[x][y] == 0xFFFFFFFF) printf(".");
+    //         else if((ppu->frame_buffer)[x][y] == 0xFFAAAAAA) printf("|");
+    //         else if((ppu->frame_buffer)[x][y] == 0xFF555555) printf("/");
+    //         else if((ppu->frame_buffer)[x][y] == 0xFF000000) printf("X");
+    //     }
+    //     printf("\n");
+    // }
+    // printf("-----------------------------------------------------\n");
+
+    SDL_UpdateTexture(texture, NULL, (ppu->frame_buffer).data(), SCREEN_WIDTH * sizeof(uint32_t));
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, texture, NULL, NULL);
+    SDL_RenderPresent(renderer);
+}
+
+void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *texture){
     ppu->cycles += cpu_cycles;
 
     uint8_t lcdc = ppu->memory[0xFF40];
@@ -113,6 +132,7 @@ void ppu_step(PPU *ppu, int cpu_cycles){
         return;
     }
 
+    // printf("cycles: %d lines: %d lcdc: %x\n", ppu->cycles, ppu->line, lcdc);
     switch(ppu->mode){
         case OAM_SCAN:
             if(ppu->cycles >= 20){
@@ -152,6 +172,8 @@ void ppu_step(PPU *ppu, int cpu_cycles){
                 ppu->memory[0xFF44] = ppu->line;
 
                 if(ppu->line > 153){
+                    drawGrid(ppu);
+                    debugDraw(ppu, renderer, texture);
                     ppu->line = 0;
                     ppu->memory[0xFF44] = 0;
                     ppu->mode = OAM_SCAN;

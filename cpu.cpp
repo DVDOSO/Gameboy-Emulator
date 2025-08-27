@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <fstream>
 #include "ppu.hpp"
+#include <SDL2/SDL.h>
 
 using namespace std;
 
@@ -4401,19 +4402,19 @@ void debug_execute(){
         m_cycles);
 }
 
-int main(){ //for testing
+int main(int argc, char* args[]){
     registers.pc = 0x100;
 
     ifstream file("./test-cartridges/Tetris.gb", ios::in|ios::binary|ios::ate);
     if(file.is_open()){
         streamsize size = file.tellg();
         rom_data = new uint8_t[size];
-        memory = new uint8_t[0xFFFF+5];
+        memory = new uint8_t[0x10000];
         file.seekg(0, ios::beg);
         if (file.read(reinterpret_cast<char*>(rom_data), size)) {
-            cout << "File read successfully." << endl;
+            cout << "File read successfully." << '\n';
         } else {
-            cerr << "Error reading file." << endl;
+            cerr << "Error reading file." << '\n';
         }
         file.close();
 
@@ -4432,9 +4433,35 @@ int main(){ //for testing
         ppu->line = 0;
         ppu->mode = OAM_SCAN;
 
-        bool flag = false;
 
+        SDL_Init(SDL_INIT_EVERYTHING);
+        SDL_Window *window = SDL_CreateWindow("Gameboy Emulator", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+            SCREEN_WIDTH * 4, SCREEN_HEIGHT*4, SDL_WINDOW_ALLOW_HIGHDPI);
+        if(window == NULL){
+            cerr << "Could not create window: " << SDL_GetError() << '\n';
+            return 1;
+        }
+
+        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        if(renderer == NULL){
+            cerr << "Could not create renderer: " << SDL_GetError() << '\n';
+            return 1;
+        }
+        SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
+
+        SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 
+            SCREEN_WIDTH, SCREEN_HEIGHT);
+        if(texture == NULL){
+            cerr << "Could not create texture: " << SDL_GetError() << '\n';
+            return 1;
+        }
+
+        SDL_Event windowEvent;
         while(true){
+            if(SDL_PollEvent(&windowEvent)){
+                if(windowEvent.type == SDL_QUIT) break;
+            }
+
             int initial_m_cycles = m_cycles;
             if(ime_flag){
                 uint8_t if_reg = memory[0xFF0F];
@@ -4454,11 +4481,13 @@ int main(){ //for testing
             }
 
             execute_instruction();
-            ppu_step(ppu, m_cycles - initial_m_cycles);
+            // debug_execute();
+            ppu_step(ppu, m_cycles - initial_m_cycles, renderer, texture);
         }
 
-        delete ppu;
-        ppu = nullptr;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+
         delete[] rom_data;
     }
 
