@@ -1,8 +1,11 @@
 #include <iostream>
 #include <stdio.h>
 #include <fstream>
+#include <cstdint>
+#ifndef SST_TEST
 #include "ppu.hpp"
 #include <SDL2/SDL.h>
+#endif
 
 using namespace std;
 
@@ -18,17 +21,20 @@ int tima_counter = 0;
 // --- Memory bus -----------------------------------------------------------
 uint8_t read8(uint16_t addr)
 {
+#ifndef SST_TEST
     if (addr == 0xFF00)
     {
         // Joypad stub (real input comes in Step 6): report all buttons released
         // (active-low => 1 = not pressed). Keep the game's select bits (4-5).
         return memory[0xFF00] | 0xCF;
     }
+#endif
     return memory[addr];
 }
 
 void write8(uint16_t addr, uint8_t val)
 {
+#ifndef SST_TEST
     if (addr < 0x8000)
         return; // ROM region: writes ignored (no MBC)
 
@@ -39,9 +45,11 @@ void write8(uint16_t addr, uint8_t val)
         memory[0xFF04] = 0;
         return;
     }
+#endif
 
     memory[addr] = val;
 
+#ifndef SST_TEST
     if (addr == 0xFF02 && (val & 0x81) == 0x81)
     {
         putchar(memory[0xFF01]);
@@ -50,6 +58,7 @@ void write8(uint16_t addr, uint8_t val)
         memory[0xFF02] = val & ~0x80; // transfer complete (clear start bit)
         memory[0xFF0F] |= 0x08;   // request Serial interrupt
     }
+#endif
 }
 
 void timer_step(int m_cycles_elapsed)
@@ -2565,7 +2574,6 @@ void execute_instruction()
         registers.pc++;
         stopped = true;
         m_cycles += 1;
-        registers.pc++;
         break;
     }
     case 0x11:
@@ -2710,6 +2718,7 @@ void execute_instruction()
         uint8_t bit0 = registers.a & 1;
         registers.a = (registers.a >> 1) | (((registers.f >> 4) & 1) << 7);
         bit0 ? setCFlag(true) : setCFlag(false);
+        setZFlag(false);
         setNFlag(false);
         setHFlag(false);
         m_cycles++;
@@ -2971,7 +2980,7 @@ void execute_instruction()
         (read8(hl) & 0xF) == 0x0 ? setHFlag(true) : setHFlag(false);
         write8(hl, read8(hl) - 1);
         read8(hl) == 0 ? setZFlag(true) : setZFlag(false);
-        setNFlag(false);
+        setNFlag(true);
         m_cycles += 3;
         registers.pc++;
         break;
@@ -3237,7 +3246,7 @@ void execute_instruction()
     case 0x56:
     { // LD D, [HL]
         uint16_t hl = (registers.h << 8) | registers.l;
-        registers.c = read8(hl);
+        registers.d = read8(hl);
         m_cycles += 2;
         registers.pc++;
         break;
@@ -4821,7 +4830,6 @@ void execute_instruction()
         uint16_t hl = (registers.h << 8) | registers.l;
         registers.pc = hl;
         m_cycles++;
-        registers.pc++;
         break;
     }
     case 0xEA:
@@ -5084,6 +5092,7 @@ void set_post_boot_state()
     write8(0xFFFF, 0x00); // IE
 }
 
+#ifndef SST_TEST
 int main(int argc, char *args[])
 {
     registers.pc = 0x100;
@@ -5191,3 +5200,4 @@ int main(int argc, char *args[])
 
     return 0;
 }
+#endif // SST_TEST
