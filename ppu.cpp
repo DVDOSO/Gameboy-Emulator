@@ -90,17 +90,32 @@ void drawScanline(PPU *ppu){
     }
 }
 
-void drawGrid(PPU* ppu) {
-    for (int y = 0; y < SCREEN_HEIGHT; ++y) {
-        for (int x = 0; x < SCREEN_WIDTH; ++x) {
-            if (y % TILE_SIZE == 0) {
-                ppu->frame_buffer[y][x] = 0xFF000000;
-            }
-            if (x % TILE_SIZE == 0) {
-                ppu->frame_buffer[y][x] = 0xFF000000;
-            }
-        }
+// Tracks the STAT interrupt "line"; a STAT interrupt fires only on its rising edge.
+static bool stat_irq_line = false;
+
+// Refresh the STAT register (0xFF41): mode bits (0-1), LY==LYC coincidence (bit 2),
+// and request a STAT interrupt (IF bit 1) when an enabled source rises.
+void update_stat(PPU *ppu){
+    uint8_t stat = ppu->memory[0xFF41];
+    uint8_t ly = ppu->memory[0xFF44];
+    uint8_t lyc = ppu->memory[0xFF45];
+
+    bool coincidence = (ly == lyc);
+
+    stat = (stat & ~0x07) | (ppu->mode & 0x03) | (coincidence ? 0x04 : 0x00);
+    stat |= 0x80; // bit 7 is always set
+    ppu->memory[0xFF41] = stat;
+
+    bool line =
+        ((ppu->mode == H_BLANK) && (stat & 0x08)) ||
+        ((ppu->mode == V_BLANK) && (stat & 0x10)) ||
+        ((ppu->mode == OAM_SCAN) && (stat & 0x20)) ||
+        (coincidence && (stat & 0x40));
+
+    if(line && !stat_irq_line){
+        requestInterrupt(ppu, 0x02);
     }
+    stat_irq_line = line;
 }
 
 void debugDraw(PPU *ppu, SDL_Renderer *renderer, SDL_Texture *texture){
@@ -115,13 +130,16 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
 
     uint8_t lcdc = ppu->memory[0xFF40];
     if((lcdc & 0x80) == 0){
+        // LCD off: PPU resets to line 0, mode 0; STAT mode bits read 0.
         ppu->line = 0;
         ppu->cycles = 0;
+        ppu->mode = H_BLANK;
         ppu->memory[0xFF44] = 0;
+        ppu->memory[0xFF41] = (ppu->memory[0xFF41] & ~0x03) | 0x80;
+        stat_irq_line = false;
         return;
     }
 
-    // printf("cycles: %d lines: %d lcdc: %x\n", ppu->cycles, ppu->line, lcdc);
     switch(ppu->mode){
         case OAM_SCAN:
             if(ppu->cycles >= 20){
@@ -129,7 +147,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                 ppu->mode = DRAWING_PIXELS;
             }
             break;
-        
+
         case DRAWING_PIXELS:
             if(ppu->cycles >= 43){
                 ppu->cycles -= 43;
@@ -137,7 +155,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                 drawScanline(ppu);
             }
             break;
-        
+
         case H_BLANK:
             if(ppu->cycles >= 51){
                 ppu->cycles -= 51;
@@ -153,7 +171,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                 }
             }
             break;
-        
+
         case V_BLANK:
             if(ppu->cycles >= 114){
                 ppu->cycles -= 114;
@@ -161,7 +179,6 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                 ppu->memory[0xFF44] = ppu->line;
 
                 if(ppu->line > 153){
-                    drawGrid(ppu);
                     debugDraw(ppu, renderer, texture);
                     ppu->line = 0;
                     ppu->memory[0xFF44] = 0;
@@ -170,4 +187,6 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
             }
             break;
     }
+
+    update_stat(ppu);
 }

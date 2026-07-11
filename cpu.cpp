@@ -18,6 +18,12 @@ int tima_counter = 0;
 // --- Memory bus -----------------------------------------------------------
 uint8_t read8(uint16_t addr)
 {
+    if (addr == 0xFF00)
+    {
+        // Joypad stub (real input comes in Step 6): report all buttons released
+        // (active-low => 1 = not pressed). Keep the game's select bits (4-5).
+        return memory[0xFF00] | 0xCF;
+    }
     return memory[addr];
 }
 
@@ -36,11 +42,13 @@ void write8(uint16_t addr, uint8_t val)
 
     memory[addr] = val;
 
-    if (addr == 0xFF02 && val == 0x81)
+    if (addr == 0xFF02 && (val & 0x81) == 0x81)
     {
         putchar(memory[0xFF01]);
         fflush(stdout);
-        memory[0xFF02] = val & ~0x80;
+        memory[0xFF01] = 0xFF;    // no link cable connected -> receive 0xFF
+        memory[0xFF02] = val & ~0x80; // transfer complete (clear start bit)
+        memory[0xFF0F] |= 0x08;   // request Serial interrupt
     }
 }
 
@@ -5016,7 +5024,7 @@ void debug_execute()
 
 // Service pending interrupts. Any enabled+requested interrupt wakes the CPU from
 // HALT (regardless of IME); it is only serviced (PC pushed, jump to vector) when
-// IME is set. Priority is VBlank > STAT > Timer > Serial > Joypad (IF bit 0..4).
+// IME is set. Priority is VBlank > STAT > Timer > Serial > Joypad (IF bit 0..4)
 void handle_interrupts()
 {
     uint8_t fired = read8(0xFF0F) & read8(0xFFFF) & 0x1F;
