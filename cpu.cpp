@@ -18,15 +18,26 @@ bool stopped = false, halted = false, ime_flag = false, ei_flag = false, ei = fa
 uint16_t div_counter = 0;
 int tima_counter = 0;
 
+// Joypad button state. 1 = released, 0 = pressed (active low), matching hardware.
+// Low nibble = action buttons (bit0 A, bit1 B, bit2 Select, bit3 Start);
+// high nibble = d-pad (bit4 Right, bit5 Left, bit6 Up, bit7 Down).
+uint8_t joypad_buttons = 0xFF;
+
 // --- Memory bus -----------------------------------------------------------
 uint8_t read8(uint16_t addr)
 {
 #ifndef SST_TEST
     if (addr == 0xFF00)
     {
-        // Joypad stub (real input comes in Step 6): report all buttons released
-        // (active-low => 1 = not pressed). Keep the game's select bits (4-5).
-        return memory[0xFF00] | 0xCF;
+        // Bits 4/5 (written by the game) select which button group to read;
+        // 0 = selected. Return the selected group's state in bits 0-3 (0 = pressed).
+        uint8_t select = memory[0xFF00] & 0x30;
+        uint8_t buttons = 0x0F; // default: nothing pressed
+        if (!(select & 0x10)) // d-pad selected
+            buttons &= (joypad_buttons >> 4) & 0x0F;
+        if (!(select & 0x20)) // action buttons selected
+            buttons &= joypad_buttons & 0x0F;
+        return 0xC0 | select | buttons; // bits 6-7 always read 1
     }
 #endif
     return memory[addr];
@@ -5168,14 +5179,49 @@ int main(int argc, char *args[])
             return 1;
         }
 
+        // Keyboard -> Game Boy button bit. Arrows = d-pad, Z=A, X=B, Enter=Start,
+        // Right Shift=Select.
+        auto keyToBit = [](SDL_Keycode k) -> int {
+            switch (k)
+            {
+            case SDLK_z: return 0;      // A
+            case SDLK_x: return 1;      // B
+            case SDLK_RSHIFT: return 2; // Select
+            case SDLK_RETURN: return 3; // Start
+            case SDLK_RIGHT: return 4;
+            case SDLK_LEFT: return 5;
+            case SDLK_UP: return 6;
+            case SDLK_DOWN: return 7;
+            default: return -1;
+            }
+        };
+
+        bool quit = false;
         SDL_Event windowEvent;
-        while (true)
+        while (!quit)
         {
-            if (SDL_PollEvent(&windowEvent))
+            while (SDL_PollEvent(&windowEvent))
             {
                 if (windowEvent.type == SDL_QUIT)
-                    break;
+                    quit = true;
+                else if (windowEvent.type == SDL_KEYDOWN && !windowEvent.key.repeat)
+                {
+                    int bit = keyToBit(windowEvent.key.keysym.sym);
+                    if (bit >= 0)
+                    {
+                        joypad_buttons &= ~(1 << bit); // 0 = pressed
+                        memory[0xFF0F] |= 0x10;        // request Joypad interrupt
+                    }
+                }
+                else if (windowEvent.type == SDL_KEYUP)
+                {
+                    int bit = keyToBit(windowEvent.key.keysym.sym);
+                    if (bit >= 0)
+                        joypad_buttons |= (1 << bit); // 1 = released
+                }
             }
+            if (quit)
+                break;
 
             int initial_m_cycles = m_cycles;
 
