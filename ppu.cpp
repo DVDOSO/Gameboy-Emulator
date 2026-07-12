@@ -60,7 +60,9 @@ void drawScanline(PPU *ppu){
     }
 
     uint16_t bg_map_addr = (lcdc & 0x08) ? 0x9C00 : 0x9800;
-    uint16_t tile_data_addr = (lcdc & 0x10) ? 0x8000 : 0x8800;
+    // Unsigned mode: tile 0 at 0x8000. Signed mode: tile 0 at 0x9000, with negative
+    // indices reaching down to 0x8800 (so the base is 0x9000, not 0x8800).
+    uint16_t tile_data_addr = (lcdc & 0x10) ? 0x8000 : 0x9000;
     bool signed_tile_addressing = !(lcdc & 0x10);
 
     uint8_t bg_y = (ppu->line + scy) & 0xFF;

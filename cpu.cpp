@@ -13,6 +13,17 @@ uint8_t *memory;
 int m_cycles = 0;
 bool stopped = false, halted = false, ime_flag = false, ei_flag = false, ei = false;
 
+// --- Cartridge / MBC state ------------------------------------------------
+// memory[] holds 0x8000-0xFFFF (VRAM/WRAM/OAM/IO/HRAM). Cartridge ROM lives in
+// rom_data (all banks) and external cart RAM in ext_ram, both routed by the MBC.
+uint8_t *rom_data = nullptr;
+uint32_t rom_size = 0;
+uint8_t ext_ram[0x8000] = {0}; // up to 4x8KB banks
+int mbc_type = 0;              // 0 = none, 1 = MBC1, 3 = MBC3
+int rom_bank = 1;             // current 0x4000-0x7FFF bank
+int ram_bank = 0;
+bool ram_enabled = false;
+
 // Timer internal state (see timer_step). div_counter is the free-running 16-bit
 // counter whose high byte is exposed as DIV (0xFF04).
 uint16_t div_counter = 0;
@@ -27,6 +38,19 @@ uint8_t joypad_buttons = 0xFF;
 uint8_t read8(uint16_t addr)
 {
 #ifndef SST_TEST
+    if (addr < 0x4000)
+        return rom_data[addr]; // ROM bank 0 (fixed)
+    if (addr < 0x8000)         // ROM bank N (switchable)
+    {
+        uint32_t off = (uint32_t)rom_bank * 0x4000 + (addr - 0x4000);
+        return (off < rom_size) ? rom_data[off] : 0xFF;
+    }
+    if (addr >= 0xA000 && addr < 0xC000) // external cartridge RAM
+    {
+        if (!ram_enabled)
+            return 0xFF;
+        return ext_ram[(ram_bank * 0x2000 + (addr - 0xA000)) & 0x7FFF];
+    }
     if (addr == 0xFF00)
     {
         // Bits 4/5 (written by the game) select which button group to read;
@@ -47,7 +71,35 @@ void write8(uint16_t addr, uint8_t val)
 {
 #ifndef SST_TEST
     if (addr < 0x8000)
-        return; // ROM region: writes ignored (no MBC)
+    {
+        // Writes to the ROM area are MBC control registers.
+        if (mbc_type == 0)
+            return; // ROM only: ignore
+        if (addr < 0x2000)
+            ram_enabled = ((val & 0x0F) == 0x0A);
+        else if (addr < 0x4000)
+        {
+            if (mbc_type == 3)
+                rom_bank = (val & 0x7F) ? (val & 0x7F) : 1;
+            else // MBC1: lower 5 bits, bank 0 aliases to 1
+            {
+                rom_bank = (rom_bank & 0x60) | (val & 0x1F);
+                if ((val & 0x1F) == 0)
+                    rom_bank |= 1;
+            }
+        }
+        else if (addr < 0x6000)
+            ram_bank = val & 0x03; // RAM bank (MBC3 has no RTC on type 0x13)
+        // 0x6000-0x7FFF: MBC1 mode / MBC3 RTC latch -- unused here
+        return;
+    }
+
+    if (addr >= 0xA000 && addr < 0xC000) // external cartridge RAM
+    {
+        if (ram_enabled)
+            ext_ram[(ram_bank * 0x2000 + (addr - 0xA000)) & 0x7FFF] = val;
+        return;
+    }
 
     // DIV (0xFF04): any CPU write resets the whole internal counter to 0.
     if (addr == 0xFF04)
@@ -67,7 +119,7 @@ void write8(uint16_t addr, uint8_t val)
     {
         uint16_t src = val << 8;
         for (int i = 0; i < 0xA0; i++)
-            memory[0xFE00 + i] = memory[src + i];
+            memory[0xFE00 + i] = read8(src + i); // source may be banked ROM/RAM
     }
 
     if (addr == 0xFF02 && (val & 0x81) == 0x81)
@@ -5125,25 +5177,31 @@ int main(int argc, char *args[])
     if (file.is_open())
     {
         streamsize size = file.tellg();
-        memory = new uint8_t[0x10000](); // 64KB address space, zero-initialized
+        rom_size = (uint32_t)size;
+        rom_data = new uint8_t[rom_size](); // full cartridge ROM (all banks)
+        memory = new uint8_t[0x10000]();     // 0x8000-0xFFFF working memory
         file.seekg(0, ios::beg);
-        // Load the ROM straight into the low address space (0x0000-0x7FFF).
-        streamsize load_size = (size < 0x8000) ? size : 0x8000;
-        if (file.read(reinterpret_cast<char *>(memory), load_size))
-        {
+        if (file.read(reinterpret_cast<char *>(rom_data), size))
             cout << "File read successfully." << '\n';
-        }
         else
-        {
             cerr << "Error reading file." << '\n';
-        }
         file.close();
 
-        // --- Step 1 memory-bus verification ---
-        printf("Cart type (0x0147): 0x%02X (expect 0x00 ROM ONLY)\n", read8(0x0147));
-        printf("ROM size  (0x0148): 0x%02X (expect 0x00 = 32KB)\n", read8(0x0148));
-        printf("Logo byte (0x0104): 0x%02X (expect 0xCE) -> %s\n",
-               read8(0x0104), (read8(0x0104) == 0xCE) ? "OK" : "MISMATCH");
+        // Pick the MBC from the cartridge type byte (0x0147).
+        uint8_t cart_type = rom_data[0x0147];
+        if (cart_type == 0x00)
+            mbc_type = 0; // ROM only
+        else if (cart_type <= 0x03)
+            mbc_type = 1; // MBC1 family
+        else if (cart_type >= 0x0F && cart_type <= 0x13)
+            mbc_type = 3; // MBC3 family
+        else
+            mbc_type = 1; // best-effort fallback
+
+        printf("Title: %.15s\n", rom_data + 0x0134);
+        printf("Cart type 0x%02X -> MBC%d, ROM %u KiB, logo %s\n",
+               cart_type, mbc_type, rom_size / 1024,
+               (rom_data[0x0104] == 0xCE) ? "OK" : "MISMATCH");
         fflush(stdout);
 
         set_post_boot_state(); // emulate the boot ROM handoff (registers + IO regs)
@@ -5163,7 +5221,7 @@ int main(int argc, char *args[])
             return 1;
         }
 
-        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
         if (renderer == NULL)
         {
             cerr << "Could not create renderer: " << SDL_GetError() << '\n';
@@ -5196,10 +5254,18 @@ int main(int argc, char *args[])
             }
         };
 
+        // Frame timing: one DMG frame is 70224 T-cycles = 17556 M-cycles (~59.7 Hz).
+        // We poll input and pace once per emulated frame; polling every instruction
+        // was the dominant bottleneck.
+        const int CYCLES_PER_FRAME = 17556;
+        const double FRAME_MS = 1000.0 / 59.73;
+
         bool quit = false;
         SDL_Event windowEvent;
         while (!quit)
         {
+            uint64_t frame_start = SDL_GetPerformanceCounter();
+
             while (SDL_PollEvent(&windowEvent))
             {
                 if (windowEvent.type == SDL_QUIT)
@@ -5223,29 +5289,40 @@ int main(int argc, char *args[])
             if (quit)
                 break;
 
-            int initial_m_cycles = m_cycles;
-
-            handle_interrupts();
-
-            if (halted)
+            // Emulate one frame's worth of cycles.
+            int frame_cycles = 0;
+            while (frame_cycles < CYCLES_PER_FRAME)
             {
-                m_cycles += 1; // idle a cycle so the PPU/timer can advance and wake us
-            }
-            else
-            {
-                execute_instruction();
-                // debug_execute();
+                int before = m_cycles;
+
+                handle_interrupts();
+
+                if (halted)
+                    m_cycles += 1; // idle a cycle so the PPU/timer can advance and wake us
+                else
+                    execute_instruction();
+
+                int elapsed = m_cycles - before;
+                timer_step(elapsed);
+                ppu_step(ppu, elapsed, renderer, texture);
+                frame_cycles += elapsed;
             }
 
-            int elapsed = m_cycles - initial_m_cycles;
-            timer_step(elapsed);
-            ppu_step(ppu, elapsed, renderer, texture);
+            // Pace to ~59.7 fps: coarse SDL_Delay for the bulk (low CPU), then a short
+            // busy-wait for precision (SDL_Delay alone oversleeps on Windows).
+            double freq = (double)SDL_GetPerformanceFrequency();
+            double emu_ms = (double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0 / freq;
+            if (emu_ms < FRAME_MS - 2.0)
+                SDL_Delay((Uint32)(FRAME_MS - emu_ms - 2.0));
+            while ((double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0 / freq < FRAME_MS)
+                ; // spin the last bit
         }
 
         SDL_DestroyWindow(window);
         SDL_Quit();
 
         delete[] memory;
+        delete[] rom_data;
     }
     else
     {
