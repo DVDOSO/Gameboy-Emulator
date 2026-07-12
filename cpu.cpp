@@ -50,6 +50,15 @@ void write8(uint16_t addr, uint8_t val)
     memory[addr] = val;
 
 #ifndef SST_TEST
+    // OAM DMA (0xFF46): copy 0xXX00-0xXX9F into OAM (0xFE00-0xFE9F). Done instantly
+    // (real hardware takes 160 M-cycles); games use this every frame to move sprites.
+    if (addr == 0xFF46)
+    {
+        uint16_t src = val << 8;
+        for (int i = 0; i < 0xA0; i++)
+            memory[0xFE00 + i] = memory[src + i];
+    }
+
     if (addr == 0xFF02 && (val & 0x81) == 0x81)
     {
         putchar(memory[0xFF01]);

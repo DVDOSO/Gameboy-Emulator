@@ -36,6 +36,14 @@ void requestInterrupt(PPU *ppu, uint8_t interrupt_flag){
     ppu->memory[0xFF0F] |= interrupt_flag;
 }
 
+// Raw BG/window colour index (0-3, pre-palette) for the scanline currently being
+// drawn. Sprite rendering reads it to resolve the BG-over-OBJ priority bit.
+static uint8_t bg_color_index_line[SCREEN_WIDTH];
+
+// The window has its own line counter that only advances on lines where the window
+// is actually rendered (not the same as LY). Reset to 0 at the top of each frame.
+int window_line_counter = 0;
+
 void drawScanline(PPU *ppu){
     uint8_t lcdc = ppu->memory[0xFF40];
     uint8_t scy = ppu->memory[0xFF42];
@@ -46,6 +54,7 @@ void drawScanline(PPU *ppu){
     if(!bg_enabled){
         for(int x = 0; x < SCREEN_WIDTH; x++){
             (ppu->frame_buffer)[ppu->line][x] = GB_COLOR_PALETTE[0];
+            bg_color_index_line[x] = 0;
         }
         return;
     }
@@ -87,7 +96,107 @@ void drawScanline(PPU *ppu){
         uint32_t final_pixel_color = GB_COLOR_PALETTE[final_gb_color_index];
 
         (ppu->frame_buffer)[ppu->line][x] = final_pixel_color;
+        bg_color_index_line[x] = color_index;
     }
+
+    // --- Window layer ---
+    // Drawn over the BG when enabled (LCDC.5), once LY has reached WY. The window's
+    // top-left pixel maps to screen (WX-7, WY). It uses its own line counter that only
+    // advances on lines where the window is drawn.
+    uint8_t wy = ppu->memory[0xFF4A];
+    uint8_t wx = ppu->memory[0xFF4B];
+    if((lcdc & 0x20) && ppu->line >= wy && wx <= 166){
+        uint16_t win_map_addr = (lcdc & 0x40) ? 0x9C00 : 0x9800;
+        uint8_t win_tile_y = window_line_counter % 8;
+        uint8_t win_tile_row = window_line_counter / 8;
+        int win_start = (int)wx - 7;
+
+        for(int x = (win_start < 0 ? 0 : win_start); x < SCREEN_WIDTH; x++){
+            int win_x = x - win_start;
+            uint8_t win_tile_col = win_x / 8;
+            uint8_t win_pix = win_x % 8;
+            uint16_t map_idx = (win_tile_row * 32) + win_tile_col;
+            uint8_t tile_id = ppu->memory[win_map_addr + map_idx];
+
+            uint16_t base = signed_tile_addressing
+                ? tile_data_addr + (int8_t)tile_id * 16
+                : tile_data_addr + tile_id * 16;
+            uint16_t row_addr = base + win_tile_y * 2;
+            uint8_t b1 = ppu->memory[row_addr];
+            uint8_t b2 = ppu->memory[row_addr + 1];
+
+            int bp = 7 - win_pix;
+            uint8_t ci = ((b1 >> bp) & 1) | (((b2 >> bp) & 1) << 1);
+            uint8_t shade = (bgp >> (ci * 2)) & 0x03;
+            (ppu->frame_buffer)[ppu->line][x] = GB_COLOR_PALETTE[shade];
+            bg_color_index_line[x] = ci; // window counts as BG for OBJ priority
+        }
+        window_line_counter++;
+    }
+}
+
+// Draw sprites (OBJ) over the background for the current scanline.
+// Handles 8x8/8x16, X/Y flip, OBP0/OBP1 palettes, BG-over-OBJ priority, the 10-per-
+// line limit, and DMG X-coordinate priority.
+void drawSprites(PPU *ppu){
+    uint8_t lcdc = ppu->memory[0xFF40];
+    if(!(lcdc & 0x02)) return; // OBJ disabled
+
+    int height = (lcdc & 0x04) ? 16 : 8;
+    int line = ppu->line;
+
+    // Gather up to 10 sprites covering this scanline, in OAM order.
+    int idx[10], count = 0;
+    for(int i = 0; i < 40 && count < 10; i++){
+        int sy = (int)ppu->memory[0xFE00 + i*4] - 16;
+        if(line >= sy && line < sy + height) idx[count++] = i;
+    }
+
+    // DMG priority: lower X wins; ties broken by lower OAM index. Draw lowest priority
+    // first so the highest-priority sprite ends up on top. Sort indices so the array is
+    // ordered highest-priority-first, then iterate in reverse when drawing.
+    for(int a = 0; a < count; a++)
+        for(int b = a+1; b < count; b++){
+            int xa = ppu->memory[0xFE00 + idx[a]*4 + 1];
+            int xb = ppu->memory[0xFE00 + idx[b]*4 + 1];
+            if(xb < xa || (xb == xa && idx[b] < idx[a])){ int t = idx[a]; idx[a] = idx[b]; idx[b] = t; }
+        }
+
+    for(int s = count - 1; s >= 0; s--){
+        int i = idx[s];
+        int sy   = (int)ppu->memory[0xFE00 + i*4] - 16;
+        int sx   = (int)ppu->memory[0xFE00 + i*4 + 1] - 8;
+        uint8_t tile = ppu->memory[0xFE00 + i*4 + 2];
+        uint8_t attr = ppu->memory[0xFE00 + i*4 + 3];
+
+        bool flip_y   = attr & 0x40;
+        bool flip_x   = attr & 0x20;
+        bool bg_over  = attr & 0x80;
+        uint8_t obp   = (attr & 0x10) ? ppu->memory[0xFF49] : ppu->memory[0xFF48];
+
+        int row = line - sy;
+        if(flip_y) row = (height - 1) - row;
+
+        if(height == 16) tile &= 0xFE; // 8x16: LSB ignored, low tile = top
+        uint16_t tile_addr = 0x8000 + tile * 16 + row * 2; // OBJ always uses 0x8000 base
+        uint8_t byte1 = ppu->memory[tile_addr];
+        uint8_t byte2 = ppu->memory[tile_addr + 1];
+
+        for(int px = 0; px < 8; px++){
+            int screen_x = sx + px;
+            if(screen_x < 0 || screen_x >= SCREEN_WIDTH) continue;
+
+            int bit = flip_x ? px : (7 - px);
+            uint8_t color_index = ((byte1 >> bit) & 1) | (((byte2 >> bit) & 1) << 1);
+            if(color_index == 0) continue; // transparent
+
+            if(bg_over && bg_color_index_line[screen_x] != 0) continue; // BG has priority
+
+            uint8_t shade = (obp >> (color_index * 2)) & 0x03;
+            (ppu->frame_buffer)[line][screen_x] = GB_COLOR_PALETTE[shade];
+        }
+    }
+
 }
 
 // Tracks the STAT interrupt "line"; a STAT interrupt fires only on its rising edge.
@@ -137,6 +246,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
         ppu->memory[0xFF44] = 0;
         ppu->memory[0xFF41] = (ppu->memory[0xFF41] & ~0x03) | 0x80;
         stat_irq_line = false;
+        window_line_counter = 0;
         return;
     }
 
@@ -153,6 +263,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                 ppu->cycles -= 43;
                 ppu->mode = H_BLANK;
                 drawScanline(ppu);
+                drawSprites(ppu);
             }
             break;
 
@@ -183,6 +294,7 @@ void ppu_step(PPU *ppu, int cpu_cycles, SDL_Renderer *renderer, SDL_Texture *tex
                     ppu->line = 0;
                     ppu->memory[0xFF44] = 0;
                     ppu->mode = OAM_SCAN;
+                    window_line_counter = 0; // new frame: reset window line counter
                 }
             }
             break;
