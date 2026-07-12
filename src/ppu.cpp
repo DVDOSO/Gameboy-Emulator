@@ -36,12 +36,10 @@ void requestInterrupt(PPU *ppu, uint8_t interrupt_flag){
     ppu->memory[0xFF0F] |= interrupt_flag;
 }
 
-// Raw BG/window colour index (0-3, pre-palette) for the scanline currently being
-// drawn. Sprite rendering reads it to resolve the BG-over-OBJ priority bit.
+// Pre-palette BG/window colour index for the current scanline; sprites read it for BG-over-OBJ priority.
 static uint8_t bg_color_index_line[SCREEN_WIDTH];
 
-// The window has its own line counter that only advances on lines where the window
-// is actually rendered (not the same as LY). Reset to 0 at the top of each frame.
+// Window's own line counter: advances only on lines where the window is drawn; reset each frame.
 int window_line_counter = 0;
 
 void drawScanline(PPU *ppu){
@@ -60,8 +58,7 @@ void drawScanline(PPU *ppu){
     }
 
     uint16_t bg_map_addr = (lcdc & 0x08) ? 0x9C00 : 0x9800;
-    // Unsigned mode: tile 0 at 0x8000. Signed mode: tile 0 at 0x9000, with negative
-    // indices reaching down to 0x8800 (so the base is 0x9000, not 0x8800).
+    // Unsigned mode: tile 0 at 0x8000. Signed mode: tile 0 at 0x9000 (down to 0x8800 for negatives).
     uint16_t tile_data_addr = (lcdc & 0x10) ? 0x8000 : 0x9000;
     bool signed_tile_addressing = !(lcdc & 0x10);
 
@@ -101,10 +98,7 @@ void drawScanline(PPU *ppu){
         bg_color_index_line[x] = color_index;
     }
 
-    // --- Window layer ---
-    // Drawn over the BG when enabled (LCDC.5), once LY has reached WY. The window's
-    // top-left pixel maps to screen (WX-7, WY). It uses its own line counter that only
-    // advances on lines where the window is drawn.
+    // Window: drawn over BG when enabled (LCDC.5) once LY >= WY; top-left maps to (WX-7, WY).
     uint8_t wy = ppu->memory[0xFF4A];
     uint8_t wx = ppu->memory[0xFF4B];
     if((lcdc & 0x20) && ppu->line >= wy && wx <= 166){
@@ -137,9 +131,7 @@ void drawScanline(PPU *ppu){
     }
 }
 
-// Draw sprites (OBJ) over the background for the current scanline.
-// Handles 8x8/8x16, X/Y flip, OBP0/OBP1 palettes, BG-over-OBJ priority, the 10-per-
-// line limit, and DMG X-coordinate priority.
+// Draw OBJ over BG for the current scanline: 8x8/8x16, X/Y flip, OBP0/1, BG priority, 10/line, DMG X-priority.
 void drawSprites(PPU *ppu){
     uint8_t lcdc = ppu->memory[0xFF40];
     if(!(lcdc & 0x02)) return; // OBJ disabled
@@ -154,9 +146,7 @@ void drawSprites(PPU *ppu){
         if(line >= sy && line < sy + height) idx[count++] = i;
     }
 
-    // DMG priority: lower X wins; ties broken by lower OAM index. Draw lowest priority
-    // first so the highest-priority sprite ends up on top. Sort indices so the array is
-    // ordered highest-priority-first, then iterate in reverse when drawing.
+    // DMG priority: lower X wins (ties by lower OAM index). Sort highest-priority-first, draw in reverse.
     for(int a = 0; a < count; a++)
         for(int b = a+1; b < count; b++){
             int xa = ppu->memory[0xFE00 + idx[a]*4 + 1];
@@ -204,8 +194,7 @@ void drawSprites(PPU *ppu){
 // Tracks the STAT interrupt "line"; a STAT interrupt fires only on its rising edge.
 static bool stat_irq_line = false;
 
-// Refresh the STAT register (0xFF41): mode bits (0-1), LY==LYC coincidence (bit 2),
-// and request a STAT interrupt (IF bit 1) when an enabled source rises.
+// Refresh STAT (0xFF41): mode bits, LY==LYC coincidence; request STAT interrupt on an enabled source's rising edge.
 void update_stat(PPU *ppu){
     uint8_t stat = ppu->memory[0xFF41];
     uint8_t ly = ppu->memory[0xFF44];

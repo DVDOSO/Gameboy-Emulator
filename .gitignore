@@ -1,3 +1,5 @@
 test-cartridges/
 *.o
 *.exe
+*.ppm
+load

@@ -1,8 +1,11 @@
-// Headless SingleStepTests (sm83) harness. Reuses the emulator's CPU by including
-// cpu.cpp with SST_TEST defined (flat 64KB memory, no SDL, no IO side effects).
+// Headless SingleStepTests (sm83) harness. Links the emulator CPU + memory modules
+// built with SST_TEST defined (flat 64KB memory, no SDL, no IO side effects).
 // Reads a compact test stream on stdin (produced by run_sst.py) and reports results.
-#define SST_TEST
-#include "cpu.cpp"
+// Build: g++ -DSST_TEST -I src tests/sst_test.cpp src/cpu.cpp src/memory.cpp src/timer.cpp -o sst_test
+#include "emulator.hpp"
+#include <iostream>
+#include <string>
+#include <cstdio>
 
 int main()
 {
