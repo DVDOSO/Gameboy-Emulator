@@ -4,9 +4,13 @@ A DMG (original Game Boy) emulator written in C++ with SDL2. It runs commercial
 games at full speed — **Tetris** and **Pokémon Red** are both playable.
 
 <p align="center">
-  <img src="docs/screenshots/tetris-gameplay.png" width="30%" alt="Tetris gameplay"/>
-  <img src="docs/screenshots/tetris-menu.png" width="30%" alt="Tetris menu"/>
-  <img src="docs/screenshots/pokemon-intro.png" width="30%" alt="Pokémon Red intro"/>
+  <img src="docs/screenshots/tetris-gameplay.png" width="32%" alt="Tetris gameplay"/>
+  <img src="docs/screenshots/pokemon-title.png" width="32%" alt="Pokémon Red title screen"/>
+  <img src="docs/screenshots/pokemon-gameplay.png" width="32%" alt="Pokémon Red overworld"/>
+</p>
+<p align="center">
+  <img src="docs/screenshots/tetris-menu.png" width="32%" alt="Tetris menu"/>
+  <img src="docs/screenshots/pokemon-intro.png" width="32%" alt="Pokémon Red intro"/>
 </p>
 
 ## Features
